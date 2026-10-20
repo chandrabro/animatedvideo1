@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Puppet Stage</title>
+<style>
+:root{--bg:#1b2030;--pn:#252b42;--ln:#38406a;--tx:#eef0f8;--mu:#9aa3c4;--ac:#ffb84d;--ok:#5ad1c0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 "Trebuchet MS",system-ui,sans-serif;height:100vh;display:grid;grid-template-columns:280px 1fr 320px;grid-template-rows:1fr 112px;overflow:hidden}
+aside{background:var(--pn);padding:14px;overflow:auto;grid-row:1/3;border-inline:1px solid var(--ln)}
+#L{grid-column:1;border-inline-start:0}#R{grid-column:3;border-inline-end:0}
+main{grid-column:2;grid-row:1;display:flex;flex-direction:column;padding:12px;min-height:0;gap:10px}
+#strip{grid-column:2;grid-row:2;display:flex;gap:10px;padding:10px 12px;overflow-x:auto;border-top:1px solid var(--ln);align-items:center}
+h3{margin:0 0 8px;font-size:15px}
+button,select,input{font:inherit;color:var(--tx)}
+button{background:#323a5c;border:1px solid var(--ln);border-radius:8px;padding:6px 10px;cursor:pointer}
+button:hover{background:#3d4670}button.p{background:var(--ac);color:#1b1b1b;border-color:var(--ac);font-weight:700}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
+select,input[type=text]{background:#1b2030;border:1px solid var(--ln);border-radius:6px;padding:5px;width:100%}
+input[type=color]{width:38px;height:28px;border:0;background:none;padding:0}
+input[type=range]{width:100%}
+label{display:block;color:var(--mu);font-size:12px;margin:8px 0 2px}
+.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.card{border:1px solid var(--ln);border-radius:10px;padding:10px;margin:10px 0;background:#1f2539}
+.chip{padding:5px 10px;border-radius:99px;border:1px solid var(--ln);background:#1f2539;cursor:pointer}
+.chip.on{background:var(--ac);color:#1b1b1b;border-color:var(--ac)}
+#stage{width:100%;flex:1;min-height:0;object-fit:contain;background:#000;border-radius:10px;aspect-ratio:16/9;max-height:calc(100vh - 210px);align-self:center}
+.th{border:2px solid var(--ln);border-radius:8px;cursor:pointer;flex:none;width:128px;height:72px;display:block}
+.th.on{border-color:var(--ac)}
+#msg{color:var(--mu);font-size:12px;min-height:16px}
+.rec{background:#c0392b!important}
+@media(max-width:900px){body{display:block;overflow:auto;height:auto}aside{border:0}#strip{overflow-x:auto}}
+</style></head>
+<body>
+<aside id="L"></aside>
+<main>
+ <div class="row"><button class="p" onclick="play(0)">Play all</button><button onclick="play(S.cur)">Play from this scene</button><button onclick="stop()">Stop</button><button class="p" id="exp" onclick="exportMP4()">Export MP4</button><span id="msg"></span></div>
+ <canvas id="stage" width="1280" height="720"></canvas>
+</main>
+<aside id="R"></aside>
+<div id="strip"></div>
+
+<script type="module">
+const $=id=>document.getElementById(id);
+const S={chars:[],scenes:[],cur:0,sel:null,n:1};
+const A={};let AC=null;
+const FACE=['Front','Look left','Look right'],EXPR=['Neutral','Happy','Sad','Angry','Surprised'],FIT=['T-shirt and trousers','Dress','Hoodie and trousers'],BODY=['Masculine','Feminine'],
+CMOVE=['Static','Slow zoom in','Slow zoom out','Pan right','Pan left','Handheld','Gentle sway'],
+SHOT=[['Wide',1,0,0,0],['Medium',1.4,0,.05,0],['Close-up',2,0,-.1,0],['Extreme close-up',2.8,0,-.12,0],['Low angle',1.3,0,.3,-4],['High angle',1.3,0,-.25,3],['Dutch tilt',1.15,0,0,10]],
+HAIR=['Short','Long','Bun','Spiky','Bald','Bob','Ponytail'],MOVE=['Stand','Walk around','Jump','Dance','Slide'],
+ACT=['None','Wave','Clap','Point','Shrug','Cheer'],BG=['Living room','Park','Night city','Beach','Studio'];
+const rnd=a=>a[Math.floor(Math.random()*a.length)];
+const ac=()=>AC||(AC=new AudioContext());
+const msg=t=>$('msg').textContent=t||'';
+
+function newChar(){const f=Math.random()<.5,c={id:S.n++,name:'',fem:f?1:0,fit:f?1:0,skin:rnd(['#f1c8a5','#d9a273','#a8704a','#6b4430']),
+ hair:rnd(['#2b1d14','#8a5a2b','#e0b04a','#c24b3a','#1d1d1d']),hs:f?rnd([1,2,5,6]):rnd([0,3,0]),top:rnd(['#4f8ef7','#e85d75','#44b87d','#9b6bd6','#f0a030']),
+ bot:rnd(['#2d3a63','#3b3b3b','#5a4632','#7a3b5e']),shoe:'#22222c',eye:rnd(['#4b2e1b','#2f6b9a','#3a7d44']),lip:f?'#c2455a':'#b5645a'};
+ c.name='Character '+(S.chars.length+1);S.chars.push(c);S.sel=c.id;return c}
+const newScene=()=>({bg:S.scenes.length%BG.length,min:4,chars:[],cam:{m:0,z:1,x:0,y:0,r:0,f:-1}});
+newChar();S.scenes.push(newScene());
+
+/* ---------- drawing ---------- */
+const line=(g,x1,y1,x2,y2,w,col)=>{g.strokeStyle=col;g.lineWidth=w;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke()};
+const circ=(g,x,y,r,col)=>{g.fillStyle=col;g.beginPath();g.arc(x,y,r,0,7);g.fill()};
+const ell=(g,x,y,rx,ry,col)=>{g.fillStyle=col;g.beginPath();g.ellipse(x,y,rx,ry,0,0,7);g.fill()};
+
+const shade=(h,a)=>{const n=parseInt(h.slice(1),16),f=a<0?0:255,k=Math.abs(a),m=v=>Math.round(v+(f-v)*k);return`rgb(${m(n>>16)},${m(n>>8&255)},${m(n&255)})`};
+function drawChar(g,c,x,fy,p,sc=1.3){
+ g.save();g.translate(x+(p.dx||0),fy+(p.dy||0));g.scale(sc,sc);g.lineCap='round';g.lineJoin='round';
+ const F=c.fem,fc=p.face||0,fx=fc*8,ex=p.ex||0,hip=-112+p.bob,sh=hip-110,sw=F?31:37,hw=F?35:31,skD=shade(c.skin,-.16),topD=shade(c.top,-.22),dress=c.fit==1;
+ ell(g,0,4,62,10,'#0004');
+ [[-1,p.l1],[1,p.l2]].forEach(([s,a])=>{const ox=s*hw*.5,X=ox+Math.sin(a)*106,Y=hip+Math.cos(a)*106;line(g,ox,hip,X,Y,F?20:23,dress?c.skin:c.bot);ell(g,X+s*3+fc*3,Y+3,17,8.5,c.shoe)});
+ g.fillStyle=c.top;g.beginPath();g.moveTo(-sw,sh+6);g.quadraticCurveTo(0,sh-8,sw,sh+6);g.quadraticCurveTo(sw+2,sh+40,sw-7,hip-34);g.quadraticCurveTo(hw+2,hip-12,hw,hip+10);g.lineTo(-hw,hip+10);g.quadraticCurveTo(-hw-2,hip-12,-(sw-7),hip-34);g.quadraticCurveTo(-sw-2,sh+40,-sw,sh+6);g.fill();
+ g.fillStyle=topD;g.globalAlpha=.35;g.beginPath();g.moveTo(sw-6,sh+10);g.quadraticCurveTo(sw+2,sh+40,sw-7,hip-34);g.lineTo(sw-18,hip-34);g.quadraticCurveTo(sw-12,sh+40,sw-16,sh+12);g.fill();g.globalAlpha=1;
+ g.fillStyle=c.bot;
+ if(dress){g.beginPath();g.moveTo(-hw,hip-8);g.lineTo(hw,hip-8);g.lineTo(hw+26,hip+62);g.lineTo(-hw-26,hip+62);g.closePath();g.fill()}else g.fillRect(-hw,hip-6,hw*2,16);
+ g.fillStyle=c.skin;g.beginPath();g.moveTo(-12,sh+4);g.lineTo(12,sh+4);g.lineTo(0,sh+(F?26:17));g.fill();
+ if(c.fit==2){g.strokeStyle=topD;g.lineWidth=9;g.beginPath();g.ellipse(0,sh+4,17,9,0,0,Math.PI);g.stroke()}
+ [-1,1].forEach((s,i)=>{const a=p.a[i],sx=s*(sw-3),sy=sh+12,X=sx+Math.sin(a)*88,Y=sy+Math.cos(a)*88,k=c.fit==2?1:.42;
+  line(g,sx,sy,X,Y,F?15:17,c.skin);line(g,sx,sy,sx+(X-sx)*k,sy+(Y-sy)*k,F?17:19,c.top);circ(g,sx,sy,F?9:10,c.top);circ(g,X,Y,8.5,c.skin)});
+ const hy=sh-50;
+ g.fillStyle=c.skin;g.fillRect(-9,sh-24,18,30);g.fillStyle=skD;g.globalAlpha=.4;g.fillRect(-9,sh-24,18,12);g.globalAlpha=1;
+ g.fillStyle=c.hair;
+ if(c.hs==1){g.beginPath();g.roundRect(-46,hy-26,92,118,34);g.fill()}
+ if(c.hs==5){g.beginPath();g.roundRect(-46,hy-26,92,80,30);g.fill()}
+ if(c.hs==6){g.save();g.translate(32+fc*4,hy-28);g.rotate(.5);ell(g,0,28,13,32,c.hair);g.restore()}
+ circ(g,-37+fc*3,hy+4,7,c.skin);circ(g,37+fc*3,hy+4,7,c.skin);
+ g.fillStyle=c.skin;g.beginPath();g.ellipse(fc*3,hy,38,44,0,0,7);g.fill();
+ g.globalAlpha=.28;ell(g,-22+fx,hy+16,9,5,'#ff6b7a');ell(g,22+fx,hy+16,9,5,'#ff6b7a');g.globalAlpha=1;
+ [-1,1].forEach(s=>{const X=s*15+fx;
+  if(p.blink)line(g,X-7,hy-2,X+7,hy-2,3,'#2a1a1a');
+  else{ell(g,X,hy-2,8.5,ex==4?7.5:6,'#fff');circ(g,X+fc*2,hy-2,4.3,c.eye);circ(g,X+fc*2,hy-2,2.1,'#111');circ(g,X+fc*2+1.5,hy-4,1.2,'#fff');
+   g.strokeStyle='#2a1a1a';g.lineWidth=2.4;g.beginPath();g.moveTo(X-8.5,hy-2);g.quadraticCurveTo(X,hy-10,X+8.5,hy-2);g.stroke();
+   if(F)line(g,X+s*8,hy-3,X+s*12,hy-7,2,'#2a1a1a')}
+  const by=hy-17-(ex==4?5:0)-p.mouth*3,iy=ex==3?4:ex==2?-4:0,oy=ex==3?-1:ex==2?3:0;
+  g.strokeStyle=shade(c.hair,-.15);g.lineWidth=3.4;g.beginPath();g.moveTo(X-s*8,by+iy);g.quadraticCurveTo(X,by-3+(iy+oy)/2,X+s*8,by+oy);g.stroke()});
+ g.strokeStyle=skD;g.lineWidth=2.5;g.beginPath();g.moveTo(fx,hy+3);g.quadraticCurveTo(fx+5,hy+12,fx-2,hy+13);g.stroke();
+ const my=hy+27,m=p.mouth;
+ if(m>.06||ex==4){const o=ex==4?Math.max(m,.5):m,rx=8+o*3.5,ry=2.5+o*11;ell(g,fx,my,rx,ry,'#4a1620');if(o>.25){g.fillStyle='#fff';g.fillRect(fx-6,my-ry+1,12,3)}g.strokeStyle=c.lip;g.lineWidth=2.5;g.beginPath();g.ellipse(fx,my,rx,ry,0,0,7);g.stroke()}
+ else{g.strokeStyle=c.lip;g.lineWidth=3.4;g.beginPath();
+  if(ex==1)g.arc(fx,my-6,11,.2,Math.PI-.2);else if(ex==2)g.arc(fx,my+9,9,Math.PI+.4,-.4);else if(ex==3){g.moveTo(fx-8,my+1);g.lineTo(fx+8,my-1)}else g.arc(fx,my-3,8,.3,Math.PI-.3);g.stroke()}
+ g.fillStyle=c.hair;
+ const cap=()=>{g.beginPath();g.moveTo(-42,hy+8);g.bezierCurveTo(-52,hy-66,52,hy-66,42,hy+8);g.bezierCurveTo(36,hy-14,14,hy-30,-4,hy-27);g.bezierCurveTo(-20,hy-24,-34,hy-12,-42,hy+8);g.fill()};
+ if(c.hs!=4)cap();
+ if(c.hs==2)circ(g,0,hy-54,17,c.hair);
+ if(c.hs==3)for(let k=-3;k<=3;k++){g.beginPath();g.moveTo(k*12-9,hy-36);g.lineTo(k*12,hy-64-(k%2?8:0));g.lineTo(k*12+9,hy-36);g.fill()}
+ if(c.hs!=4){g.strokeStyle='#fff3';g.lineWidth=4;g.beginPath();g.arc(0,hy-4,32,Math.PI*1.15,Math.PI*1.5);g.stroke()}
+ g.restore()}
+
+function pose(e,t,amp){
+ const p={bob:Math.sin(t*2.2)*2.5,dx:0,dy:0,l1:.04,l2:-.04,a:[-.18,.18],mouth:amp,look:0,blink:(t%3.2)<.12};
+ if(e.mv==1){const ph=t*8;p.dx=Math.sin(t*.9)*130;p.l1=Math.sin(ph)*.5;p.l2=-p.l1;p.a=[p.l1*.8-.12,p.l2*.8+.12];p.bob=-Math.abs(Math.sin(ph))*5;p.look=Math.cos(t*.9)>0?1:-1}
+ if(e.mv==2){p.dy=-Math.abs(Math.sin(t*4))*90;p.l1=.25;p.l2=-.25;p.a=[-.7,.7]}
+ if(e.mv==3){const s=Math.sin(t*6);p.bob=s*8;p.dx=Math.sin(t*3)*25;p.l1=s*.25;p.l2=-s*.25;p.a=[-1.6+s*.6,1.6-s*.6]}
+ if(e.mv==4){p.dx=Math.sin(t*1.2)*180}
+ const w=Math.sin(t*9);
+ if(e.ac==1)p.a[1]=2.5+w*.35;
+ if(e.ac==2){const k=.7+Math.sin(t*12)*.12;p.a=[k,-k]}
+ if(e.ac==3)p.a[1]=1.55;
+ if(e.ac==4){const k=.8+Math.sin(t*3)*.1;p.a=[-k,k];p.bob+=-4}
+ if(e.ac==5){p.a=[-2.6+w*.2,2.6-w*.2];p.bob+=Math.sin(t*9)*3}
+ p.face=[0,-1,1][e.f||0]||p.look;p.ex=e.ex||0;return p}
+
+function bg(g,i,t){
+ const W=1280,H=720,gr=(a,b,y0=0,y1=H)=>{const q=g.createLinearGradient(0,y0,0,y1);q.addColorStop(0,a);q.addColorStop(1,b);g.fillStyle=q};
+ if(i==0){gr('#e9d9c3','#d8c1a0',0,600);g.fillRect(0,0,W,600);g.fillStyle='#8b6a4a';g.fillRect(0,600,W,120);g.fillStyle='#9cc6e6';g.fillRect(140,110,260,230);g.fillStyle='#fff8';g.fillRect(264,110,12,230);g.fillRect(140,218,260,12);
+  g.fillStyle='#b5544a';g.beginPath();g.roundRect(800,470,380,130,24);g.fill();g.fillStyle='#9b443c';g.beginPath();g.roundRect(800,400,380,90,24);g.fill()}
+ if(i==1){gr('#86c9f2','#d6f0ff',0,500);g.fillRect(0,0,W,500);circ(g,1050,120,60,'#ffe27a');g.fillStyle='#6cbf6c';g.beginPath();g.ellipse(300,520,520,130,0,Math.PI,0);g.fill();g.fillStyle='#4fa857';g.fillRect(0,500,W,220);
+  g.fillStyle='#7a5230';g.fillRect(970,280,36,240);circ(g,988,250,110,'#2f8f4a')}
+ if(i==2){gr('#0d1230','#2a2f6b',0,600);g.fillRect(0,0,W,600);circ(g,1100,110,45,'#f4f1d0');let s=7;const r=()=>(s=s*16807%2147483647)/2147483647;
+  for(let x=0;x<W;x+=90){const h=180+r()*260;g.fillStyle='#161b3f';g.fillRect(x,600-h,84,h);g.fillStyle='#ffd97a';for(let y=600-h+16;y<580;y+=34)for(let k=10;k<70;k+=26)if(r()>.5)g.fillRect(x+k,y,12,16)}
+  g.fillStyle='#232852';g.fillRect(0,600,W,120)}
+ if(i==3){gr('#7fd0ff','#c9efff',0,380);g.fillRect(0,0,W,380);circ(g,200,110,55,'#ffe27a');g.fillStyle='#2e9bd6';g.fillRect(0,380,W,120);
+  g.strokeStyle='#fff9';g.lineWidth=4;for(let k=0;k<6;k++){g.beginPath();g.arc(100+k*230,420+Math.sin(t+k)*6,40,Math.PI*1.1,Math.PI*1.9);g.stroke()}g.fillStyle='#f0d9a0';g.fillRect(0,500,W,220)}
+ if(i==4){gr('#3a3f6b','#1b2030');g.fillRect(0,0,W,H);const q=g.createRadialGradient(640,300,40,640,300,520);q.addColorStop(0,'#fff5');q.addColorStop(1,'#0000');g.fillStyle=q;g.fillRect(0,0,W,H);g.fillStyle='#14182a';g.fillRect(0,600,W,120)}}
+
+const amp=(e,t)=>{const a=A[e.a];if(!a||t<0||t>=a.dur)return 0;const i=Math.floor(t*30);return Math.min(1,Math.max(a.env[i]||0,a.env[i+1]||0))};
+function camera(g,s,t){const c=s.cam||{m:0,z:1,x:0,y:0,r:0,f:-1},d=durOf(s),p=Math.min(1,t/Math.max(d,.1));
+ let z=c.z,x=c.x*640,y=c.y*360,r=c.r*Math.PI/180,m=c.m;
+ if(m==1)z*=1+.3*p;if(m==2)z*=1.3-.3*p;if(m==3||m==4){z=Math.max(z,1.3);x+=(m==3?p-.5:.5-p)*360}
+ if(m==5){z*=1.04;r+=Math.sin(t*7)*.004}if(m==6)r+=Math.sin(t*.9)*.035;
+ z*=1+Math.abs(r)*1.6;
+ let cx=640+x,cy=360+y;const e=s.chars[c.f];if(e){cx=e.x*1280+x;cy=300+y}
+ cx=Math.min(1280-640/z,Math.max(640/z,cx));cy=Math.min(720-360/z,Math.max(360/z,cy));
+ if(m==5){cx+=Math.sin(t*13)*3+Math.sin(t*5.3)*4;cy+=Math.cos(t*11)*3}
+ g.translate(640,360);g.rotate(r);g.scale(z,z);g.translate(-cx,-cy)}
+function drawScene(g,s,t){g.save();camera(g,s,t);bg(g,s.bg,t);s.chars.forEach(e=>{const c=S.chars.find(k=>k.id==e.c);if(c)drawChar(g,c,e.x*1280,610,pose(e,t,amp(e,t)))});g.restore()}
+const durOf=s=>Math.max(s.min,...s.chars.map(e=>A[e.a]?A[e.a].dur+.4:0));
+const starts=()=>{let t=0;return S.scenes.map(s=>{const a=t;t+=durOf(s);return a})};
+const total=()=>S.scenes.reduce((n,s)=>n+durOf(s),0);
+function frameAt(g,T){const st=starts();let i=S.scenes.length-1;while(i>0&&T<st[i])i--;drawScene(g,S.scenes[i],T-st[i]);return i}
+
+/* ---------- playback ---------- */
+const stage=$('stage'),sg=stage.getContext('2d');let pl=null;
+function stop(){if(pl){pl.srcs.forEach(s=>{try{s.stop()}catch{}});pl=null}}
+function play(i0){stop();const c=ac();c.resume();const st=starts(),t0=c.currentTime+.1,srcs=[];
+ S.scenes.forEach((s,i)=>{if(i<i0)return;s.chars.forEach(e=>{const a=A[e.a];if(!a)return;const o=c.createBufferSource();o.buffer=a.buf;o.connect(c.destination);o.start(t0+st[i]-st[i0]);srcs.push(o)})});
+ pl={c,t0,base:st[i0],srcs}}
+function loop(){
+ if(pl){const T=pl.base+Math.max(0,pl.c.currentTime-pl.t0);if(T>=total())stop();else{const i=frameAt(sg,T);if(i!=S.cur){S.cur=i;renderStrip()}}}
+ else drawScene(sg,S.scenes[S.cur],performance.now()/1000);
+ requestAnimationFrame(loop)}
+
+/* ---------- audio ---------- */
+async function setAudio(e,buf,name){const d=buf.getChannelData(0),n=Math.ceil(buf.duration*30),env=new Float32Array(n),sp=Math.floor(buf.sampleRate/30);let mx=1e-6;
+ for(let i=0;i<n;i++){let s=0,k=0;for(let j=i*sp;j<Math.min(d.length,(i+1)*sp);j+=4){s+=d[j]*d[j];k++}env[i]=Math.sqrt(s/(k||1));mx=Math.max(mx,env[i])}
+ for(let i=0;i<n;i++)env[i]=Math.min(1,Math.pow(env[i]/mx,.8)*1.15);
+ const id='a'+S.n++;A[id]={buf,env,dur:buf.duration,name};e.a=id;render()}
+window.upl=async(i,f)=>{if(!f)return;try{setAudio(S.scenes[S.cur].chars[i],await ac().decodeAudioData(await f.arrayBuffer()),f.name)}catch{msg('Could not read that audio file. Try MP3, WAV, M4A or OGG.')}};
+let rec=null;
+window.recAudio=async i=>{
+ if(rec){rec.stop();return}
+ try{const m=await navigator.mediaDevices.getUserMedia({audio:true}),ch=[];rec=new MediaRecorder(m);rec.ondataavailable=e=>ch.push(e.data);
+  rec.onstop=async()=>{m.getTracks().forEach(t=>t.stop());rec=null;try{setAudio(S.scenes[S.cur].chars[i],await ac().decodeAudioData(await new Blob(ch).arrayBuffer()),'Recording')}catch{msg('Recording failed to decode.')}render()};
+  rec.start();msg('Recording… press the button again to stop.');render(i)}catch{msg('Microphone access was blocked. Allow it in the browser address bar.')}};
+
+/* ---------- MP4 export ---------- */
+window.exportMP4=async()=>{
+ if(!window.VideoEncoder||!window.AudioEncoder){msg('MP4 export needs Chrome, Edge or Safari 16.4+ on desktop.');return}
+ stop();const b=$('exp');b.disabled=true;
+ try{const {Muxer,ArrayBufferTarget}=await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.esm.js');
+  const T=total(),FPS=30,N=Math.ceil(T*FPS),st=starts(),hasA=S.scenes.some(s=>s.chars.some(e=>A[e.a]));
+  const mux=new Muxer({target:new ArrayBufferTarget(),video:{codec:'avc',width:1280,height:720},...(hasA?{audio:{codec:'aac',numberOfChannels:2,sampleRate:48000}}:{}),fastStart:'in-memory'});
+  const ve=new VideoEncoder({output:(c,m)=>mux.addVideoChunk(c,m),error:e=>msg(String(e))});
+  ve.configure({codec:'avc1.640028',width:1280,height:720,bitrate:5e6,framerate:FPS});
+  const cv=document.createElement('canvas');cv.width=1280;cv.height=720;const g=cv.getContext('2d');
+  for(let i=0;i<N;i++){frameAt(g,i/FPS);const f=new VideoFrame(cv,{timestamp:Math.round(i*1e6/FPS)});ve.encode(f,{keyFrame:i%60==0});f.close();
+   if(i%8==0){msg('Rendering video '+Math.round(i/N*100)+'%');await new Promise(r=>setTimeout(r))}}
+  await ve.flush();
+  if(hasA){msg('Mixing audio…');const oc=new OfflineAudioContext(2,Math.ceil(T*48000),48000);
+   S.scenes.forEach((s,i)=>s.chars.forEach(e=>{const a=A[e.a];if(!a)return;const o=oc.createBufferSource();o.buffer=a.buf;o.connect(oc.destination);o.start(st[i])}));
+   const mix=await oc.startRendering(),ae=new AudioEncoder({output:(c,m)=>mux.addAudioChunk(c,m),error:e=>msg(String(e))});
+   ae.configure({codec:'mp4a.40.2',numberOfChannels:2,sampleRate:48000,bitrate:128000});
+   const L=mix.getChannelData(0),R=mix.getChannelData(1),CH=4800;
+   for(let o=0;o<L.length;o+=CH){const n=Math.min(CH,L.length-o),d=new Float32Array(n*2);d.set(L.subarray(o,o+n));d.set(R.subarray(o,o+n),n);
+    const ad=new AudioData({format:'f32-planar',sampleRate:48000,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(o/48000*1e6),data:d});ae.encode(ad);ad.close()}
+   await ae.flush()}
+  mux.finalize();const url=URL.createObjectURL(new Blob([mux.target.buffer],{type:'video/mp4'})),a=document.createElement('a');a.href=url;a.download='my-story.mp4';a.click();msg('Done. Your MP4 was downloaded.')
+ }catch(e){msg('Export failed: '+e.message)}b.disabled=false};
+
+/* ---------- UI ---------- */
+const opts=(arr,v)=>arr.map((x,i)=>`<option value="${i}" ${i==v?'selected':''}>${x}</option>`).join('');
+window.S=S;
+window.selC=id=>{S.sel=id;render()};
+window.addC=()=>{newChar();render()};
+window.delC=()=>{if(S.chars.length<2)return msg('Keep at least one character.');const id=S.sel;S.chars=S.chars.filter(c=>c.id!=id);S.scenes.forEach(s=>s.chars=s.chars.filter(e=>e.c!=id));S.sel=S.chars[0].id;render()};
+window.setC=(k,v)=>{const c=S.chars.find(c=>c.id==S.sel),n=['hs','fem','fit'].includes(k);c[k]=n?+v:v;if(n||k=='name')render()};
+window.addToScene=id=>{const s=S.scenes[S.cur];if(s.chars.length>=3)return;const used=s.chars.map(e=>e.x),slot=[.25,.5,.75].find(x=>!used.includes(x))||.5;s.chars.push({c:+id,mv:0,ac:0,f:0,ex:0,x:slot,a:null});render()};
+window.rm=i=>{S.scenes[S.cur].chars.splice(i,1);render()};
+window.sE=(i,k,v)=>{S.scenes[S.cur].chars[i][k]=+v};
+window.sE2=(i,k,v)=>{S.scenes[S.cur].chars[i][k]=+v;render()};
+window.clrA=i=>{S.scenes[S.cur].chars[i].a=null;render()};
+window.setBg=v=>{S.scenes[S.cur].bg=+v;renderStrip()};
+window.setMin=v=>{S.scenes[S.cur].min=+v;$('mv').textContent=v+' s'};
+window.goScene=i=>{stop();S.cur=i;render()};
+window.addScene=()=>{S.scenes.splice(S.cur+1,0,newScene());S.cur++;render()};
+window.dupScene=()=>{const s=JSON.parse(JSON.stringify(S.scenes[S.cur]));S.scenes.splice(S.cur+1,0,s);S.cur++;render()};
+window.delScene=()=>{if(S.scenes.length<2)return msg('Keep at least one scene.');S.scenes.splice(S.cur,1);S.cur=Math.max(0,S.cur-1);render()};
+
+function render(recIdx){
+ const c=S.chars.find(c=>c.id==S.sel);
+ $('L').innerHTML=`<h3>Characters</h3><div class="row">${S.chars.map(k=>`<span class="chip ${k.id==S.sel?'on':''}" onclick="selC(${k.id})">${k.name}</span>`).join('')}<button onclick="addC()">New</button></div>
+ <div class="card"><canvas id="pv" width="240" height="330" style="width:100%;background:#2d3556;border-radius:8px"></canvas>
+ <label>Name</label><input type="text" value="${c.name}" onchange="setC('name',this.value)">
+ <div class="cols"><div><label>Body</label><select onchange="setC('fem',this.value)">${opts(BODY,c.fem)}</select></div><div><label>Hair style</label><select onchange="setC('hs',this.value)">${opts(HAIR,c.hs)}</select></div></div>
+ <label>Outfit</label><select onchange="setC('fit',this.value)">${opts(FIT,c.fit)}</select>
+ <div class="cols"><div><label>Skin</label><input type="color" value="${c.skin}" oninput="setC('skin',this.value)"></div><div><label>Hair</label><input type="color" value="${c.hair}" oninput="setC('hair',this.value)"></div>
+ <div><label>Top</label><input type="color" value="${c.top}" oninput="setC('top',this.value)"></div><div><label>Trousers</label><input type="color" value="${c.bot}" oninput="setC('bot',this.value)"></div>
+ <div><label>Shoes</label><input type="color" value="${c.shoe}" oninput="setC('shoe',this.value)"></div><div><label>Eyes</label><input type="color" value="${c.eye}" oninput="setC('eye',this.value)"></div><div><label>Lips</label><input type="color" value="${c.lip}" oninput="setC('lip',this.value)"></div></div>
+ <div class="row" style="margin-top:10px"><button onclick="delC()">Delete character</button></div></div>`;
+ const s=S.scenes[S.cur];
+ $('R').innerHTML=`<h3>Scene ${S.cur+1} of ${S.scenes.length}</h3>
+ <label>Background</label><select onchange="setBg(this.value)">${opts(BG,s.bg)}</select>
+ <label>Minimum length <b id="mv">${s.min} s</b> (grows to fit audio)</label><input type="range" min="2" max="30" value="${s.min}" oninput="setMin(this.value)">
+ <div class="card"><b>Camera</b>
+ <label>Shot</label><select onchange="camPreset(this.value)"><option value="">Choose a shot…</option>${SHOT.map((x,i)=>`<option value="${i}">${x[0]}</option>`).join('')}</select>
+ <label>Movement</label><select onchange="camSet('m',this.value)">${opts(CMOVE,s.cam.m)}</select>
+ <label>Focus on</label><select onchange="camSet('f',this.value)"><option value="-1">Frame centre</option>${s.chars.map((e,i)=>`<option value="${i}" ${s.cam.f==i?'selected':''}>${S.chars.find(k=>k.id==e.c).name}</option>`).join('')}</select>
+ <label>Zoom</label><input type="range" min="1" max="3" step=".05" value="${s.cam.z}" oninput="sCam('z',this.value)">
+ <label>Pan sideways</label><input type="range" min="-1" max="1" step=".05" value="${s.cam.x}" oninput="sCam('x',this.value)">
+ <label>Pan up or down</label><input type="range" min="-1" max="1" step=".05" value="${s.cam.y}" oninput="sCam('y',this.value)">
+ <label>Tilt</label><input type="range" min="-15" max="15" step="1" value="${s.cam.r}" oninput="sCam('r',this.value)"></div>
+ <label>Add character to scene (max 3)</label>
+ <select onchange="addToScene(this.value);this.value=''" ${s.chars.length>=3?'disabled':''}><option value="">${s.chars.length>=3?'Scene is full':'Choose…'}</option>${S.chars.map(k=>`<option value="${k.id}">${k.name}</option>`).join('')}</select>
+ ${s.chars.map((e,i)=>{const k=S.chars.find(k=>k.id==e.c);return `<div class="card"><div class="row" style="justify-content:space-between"><b>${k.name}</b><button onclick="rm(${i})">Remove</button></div>
+ <div class="cols"><div><label>Movement</label><select onchange="sE(${i},'mv',this.value)">${opts(MOVE,e.mv)}</select></div><div><label>Action</label><select onchange="sE(${i},'ac',this.value)">${opts(ACT,e.ac)}</select></div></div>
+ <div class="cols"><div><label>Facing</label><select onchange="sE(${i},'f',this.value)">${opts(FACE,e.f||0)}</select></div><div><label>Expression</label><select onchange="sE(${i},'ex',this.value)">${opts(EXPR,e.ex||0)}</select></div></div>
+ <label>Position</label><input type="range" min="0.1" max="0.9" step="0.01" value="${e.x}" oninput="sE(${i},'x',this.value)">
+ <label>Voice ${e.a?'· '+A[e.a].name+' ('+A[e.a].dur.toFixed(1)+' s)':''}</label>
+ <div class="row"><input type="file" accept="audio/*" style="max-width:170px" onchange="upl(${i},this.files[0])"><button class="${recIdx===i?'rec':''}" onclick="recAudio(${i})">${recIdx===i?'Stop':'Record'}</button>${e.a?`<button onclick="clrA(${i})">Clear</button>`:''}</div></div>`}).join('')||'<p style="color:var(--mu)">No characters yet. Choose one above.</p>'}`;
+ drawPrev();renderStrip()}
+function drawPrev(){const c=S.chars.find(c=>c.id==S.sel),g=$('pv').getContext('2d');g.clearRect(0,0,240,330);drawChar(g,c,120,300,pose({mv:0,ac:0,f:0,ex:1},1,0),.9)}
+setInterval(()=>{if($('pv')&&!pl)drawPrev()},400);
+const tc=document.createElement('canvas');tc.width=256;tc.height=144;
+function renderStrip(){const st=$('strip');st.innerHTML='';
+ S.scenes.forEach((s,i)=>{const cv=document.createElement('canvas');cv.width=256;cv.height=144;cv.className='th'+(i==S.cur?' on':'');
+  const g=cv.getContext('2d');g.scale(.2,.2);drawScene(g,s,.5);cv.onclick=()=>goScene(i);cv.title='Scene '+(i+1);st.appendChild(cv)});
+ const bar=document.createElement('div');bar.className='row';bar.style.cssText='flex:none;flex-direction:column;align-items:stretch';
+ bar.innerHTML='<button class="p" onclick="addScene()">Add scene</button><button onclick="dupScene()">Duplicate</button><button onclick="delScene()">Delete</button>';st.appendChild(bar)}
+Object.assign(window,{play,stop});
+window.sCam=(k,v)=>{S.scenes[S.cur].cam[k]=+v};
+window.camSet=(k,v)=>{S.scenes[S.cur].cam[k]=+v;render()};
+window.camPreset=i=>{if(i==='')return;const [,z,x,y,r]=SHOT[i],c=S.scenes[S.cur].cam;Object.assign(c,{z,x,y,r});render()};
+render();loop();
+</script>
+</body></html>
